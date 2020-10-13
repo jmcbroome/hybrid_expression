@@ -6,7 +6,8 @@
 #import
 import argparse
 import pysam
-
+import sys
+from tqdm import tqdm
 #define functions/classes
 
 def argparser():
@@ -15,8 +16,8 @@ def argparser():
     parser.add_argument('-p', '--phaser', help = 'Path to a phase information file, formatted after what snpsplit uses')
     parser.add_argument('-g', '--genome_names', nargs = 2, help = 'Names to use for tagging in reference to genome one or two. Default g1, g2', default = ['g1', 'g2'])
     parser.add_argument('-b', '--bam', help = 'path to a BAM alignment file.')
-    parser.add_argument('-c', '--conflict', type = float, help = 'Set to a float threshold to be the minimum that the majority genome needs to be for the decision. Default .9', default = .9)
-    parser.add_argument('-u', '--update', choices = ['ref', 'alt', 'none'], help = 'Update mode- returns an updated phasing info file where either the reference or the alternative has been updated to fully match the input bam (removes conflict). DO NOT USE WITH HYBRID INPUT- SINGLE GENOME SAMPLES ONLY.', default = 'none')
+    parser.add_argument('-c', '--conflict', type = float, help = 'Set to a float threshold to be the minimum that the majority genome needs to be for the decision. Default .75', default = .75)
+    parser.add_argument('-u', '--update', choices = ['ref', 'alt', 'none'], help = 'UNDER CONSTRUCTION. Update mode- returns an updated phasing info file where either the reference or the alternative has been updated to fully match the input bam (removes conflict). DO NOT USE WITH HYBRID INPUT- SINGLE GENOME SAMPLES ONLY.', default = 'none')
     args = parser.parse_args()
     return args
 
@@ -33,7 +34,8 @@ def read_phaser(phase_path):
 def update_phaser(phase_d, target, bampath, thresh = .9):
     print('\t'.join(['ID', 'Chr', 'Position', 'SNP value', 'Ref/SNP']))
     aln = pysam.AlignmentFile(bampath)
-    for locd, ra in phase_d.items():
+    for locd, ra in tqdm(phase_d.items()):
+        printed = False #tracker to recognize if the col vector is empty (no coverage) and keep the original phasing data
         chro, loc = locd
         ref, alt = ra
         try:
@@ -45,6 +47,11 @@ def update_phaser(phase_d, target, bampath, thresh = .9):
                         bc[nb] += 1
                 #check if the bc has high concurrence above the threshold
                 ub, c = max(bc.items(), key = lambda x:x[1])
+                #if any([v > 0 and k != ref for k,v in bc.items()]):
+                #    print("QC: Potential conflict", bc, file = sys.stderr)
+                #if ub != ref:
+                #    print("QC: Updating entry {} from {} to {}".format(locd, ref, ub), file = sys.stderr)
+
                 if c > sum(bc.values()) * thresh:
                     if target == 'ref':
                         nk = ub + "/" + alt
@@ -56,11 +63,16 @@ def update_phaser(phase_d, target, bampath, thresh = .9):
                 else:
                     #stick with the defaults if it doesn't pass the conflict threshold
                     nk = ref + "/" + alt
+                #print the entry
                 print('\t'.join(['asm_aln', chro, str(loc), '~', nk]))
+                printed = True
         except ValueError:
-            #no coverage at this location, return the base
+            print("No bai index available for input bam- run samtools index and try again", file = sys.stderr)
+            break
+        if not printed:
             nk = ref + "/" + alt
             print('\t'.join(['asm_aln', chro, str(loc), '~', nk]))
+
 
 def tag_bam(bampath, phaser, named, thresh = .9):
     aln = pysam.AlignmentFile(bampath)
@@ -88,6 +100,7 @@ def tag_bam(bampath, phaser, named, thresh = .9):
         elif g1 == 0 and g2 == 0:
             r.set_tag(tag = 'ps', value_type = 'Z', value = 'noinfo')
         else:
+            #print('QC: g1 {} g2 {}'.format(g1, g2), file = sys.stderr)
             r.set_tag(tag = 'ps', value_type = 'Z', value = 'conflict')
         print(r.to_string())
 
