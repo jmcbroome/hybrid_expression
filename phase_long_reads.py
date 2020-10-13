@@ -18,6 +18,7 @@ def argparser():
     parser.add_argument('-b', '--bam', help = 'path to a BAM alignment file.')
     parser.add_argument('-c', '--conflict', type = float, help = 'Set to a float threshold to be the minimum that the majority genome needs to be for the decision. Default .75', default = .75)
     parser.add_argument('-u', '--update', choices = ['ref', 'alt', 'none'], help = 'UNDER CONSTRUCTION. Update mode- returns an updated phasing info file where either the reference or the alternative has been updated to fully match the input bam (removes conflict). DO NOT USE WITH HYBRID INPUT- SINGLE GENOME SAMPLES ONLY.', default = 'none')
+    parser.add_argument('-q', '--quality_control', action = 'store_true', help = 'Use to write a tab-delimited table of variant count values to the stderr stream. For debugging and data quality evaluation.')
     args = parser.parse_args()
     return args
 
@@ -74,7 +75,7 @@ def update_phaser(phase_d, target, bampath, thresh = .9):
             print('\t'.join(['asm_aln', chro, str(loc), '~', nk]))
 
 
-def tag_bam(bampath, phaser, named, thresh = .9):
+def tag_bam(bampath, phaser, named, thresh = .9, qc = False):
     aln = pysam.AlignmentFile(bampath)
     print(aln.header)
     for r in aln:
@@ -82,6 +83,7 @@ def tag_bam(bampath, phaser, named, thresh = .9):
             continue
         g1 = 0
         g2 = 0
+        o = 0 #some variants in phasing sites won't match either reference genome (unique to strain).
         locv = r.get_aligned_pairs()
         for rl, gl in locv:
             if rl != None and gl != None:
@@ -93,6 +95,8 @@ def tag_bam(bampath, phaser, named, thresh = .9):
                         g1 += 1
                     elif talt == alt:
                         g2 += 1
+                    else:
+                        o += 1
         if g1 > (g1+g2) * thresh:
             r.set_tag(tag = 'ps', value_type = 'Z', value = named['g1'])
         elif g2 > (g1+g2) * thresh:
@@ -103,13 +107,18 @@ def tag_bam(bampath, phaser, named, thresh = .9):
             #print('QC: g1 {} g2 {}'.format(g1, g2), file = sys.stderr)
             r.set_tag(tag = 'ps', value_type = 'Z', value = 'conflict')
         print(r.to_string())
+        if qc:
+            #print the read name, length, and genome count values, tab-delimited, to stderr to be captured
+            print('\t'.join([r.query_name, str(r.query_alignment_length), str(g1), str(g2), str(o)]), file = sys.stderr)
 
 def main():
     args = argparser()
     ndict = {'g1':args.genome_names[0], 'g2':args.genome_names[1]}
     phaser_d = read_phaser(args.phaser)
+    if args.quality_control:
+        print('\t'.join(['Name', 'Length', ndict['g1'], ndict['g2'], 'other']), file = sys.stderr)
     if args.update == 'none':
-        tag_bam(args.bam, phaser_d, ndict, args.conflict)
+        tag_bam(args.bam, phaser_d, ndict, args.conflict, args.quality_control)
     elif args.update == 'ref':
         update_phaser(phaser_d, 'ref', args.bam, args.conflict)
     elif args.update == 'alt':
